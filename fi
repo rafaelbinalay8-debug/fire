@@ -1,0 +1,139 @@
+-- RAT PATCH v2 — ContentCreatorRemotes: learn, patch, monitor
+-- LEARN_MODE=true dulu sekali -> baca schema asli di console
+-- lalu LEARN_MODE=false -> patch mode aktif
+local player = game.Players.LocalPlayer
+
+local LEARN_MODE = true
+local SPOOF_OWN = true       -- spoof juga panggilan dari script/panel kamu sendiri
+local USE_FULL_SPOOF = false -- true = tabel buatanmu, false = patch respons asli
+
+local target = nil
+local GATE_KEYS = {
+    allowed = true, enabled = true, visible = true, access = true,
+    isadmin = true, admin = true, canaccesspanel = true,
+    reserved = true, active = true, unlocked = true,
+}
+local LOCK_KEYS = { locked = true }
+
+local function fullName(self)
+    if typeof(self) ~= "Instance" then return nil end
+    local ok, n = pcall(function() return self:GetFullName() end)
+    return ok and n or nil
+end
+
+local function dump(v, depth)
+    depth = depth or 0
+    if depth > 3 then return "..." end
+    if type(v) ~= "table" then return tostring(v) end
+    local parts = {}
+    for k, val in pairs(v) do
+        if #parts < 40 then
+            parts[#parts + 1] = tostring(k) .. "=" .. dump(val, depth + 1)
+        end
+    end
+    return "{" .. table.concat(parts, ",") .. "}"
+end
+
+local function patchGates(resp, seen)
+    if type(resp) ~= "table" then return resp end
+    seen = seen or {}
+    if seen[resp] then return resp end
+    seen[resp] = true
+    for k, v in pairs(resp) do
+        local lk = tostring(k):lower()
+        if GATE_KEYS[lk] then
+            resp[k] = true
+        elseif LOCK_KEYS[lk] then
+            resp[k] = false
+        elseif type(v) == "table" then
+            patchGates(v, seen)
+        end
+    end
+    return resp
+end
+
+local function fullSpoof()
+    local cmds = {}
+    local list = {"free_camera","hide_ui","hide_nameplates","character","collection","scene","servers","manage","spawn","teleport","give_item","set_money","admin_panel","camera","character_panel","collection_panel","scene_panel","servers_panel","manage_panel","movement_speed","go_to_zone","invincibility","spawn_egg","give_egg","skip_timer","pause_pursuit","stage_prank","join_server","server_directory","find_player","all","*","admin","access","permission"}
+    for _, name in ipairs(list) do
+        cmds[name] = {Allowed = true, Enabled = true, Visible = true, Locked = false, Access = true}
+    end
+    setmetatable(cmds, {
+        __index = function()
+            return {Allowed = true, Enabled = true, Visible = true, Locked = false, Access = true}
+        end,
+    })
+    return {
+        Ok = true,
+        State = {
+            Players = {[player.UserId] = true, [player.Name] = true},
+            Commands = cmds,
+            Admin = true,
+            Active = {[player.UserId] = true},
+            Servers = {},
+            Access = true,
+            TargetActive = {[player.UserId] = true},
+            Reserved = true,
+            Level = 999,
+            Permissions = {"all", "admin", "developer", "moderator", "*"},
+            Role = "admin",
+            IsAdmin = true,
+            CanAccessPanel = true,
+            Allowed = true,
+            Enabled = true,
+            Visible = true,
+            Locked = false,
+            UserId = player.UserId,
+            Username = player.Name,
+        },
+    }
+end
+
+local old_namecall
+old_namecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+    local method = getnamecallmethod()
+
+    if method == "InvokeServer" or method == "FireServer" then
+        local name = fullName(self)
+        if name then
+            if target == nil and name:find("ContentCreatorRemotes") and name:find("Request") then
+                target = self
+                warn("[RAT] target terkunci:", name)
+            end
+
+            if self == target then
+                if LEARN_MODE then
+                    local resp = table.pack(old_namecall(self, ...))
+                    warn("[RAT][LEARN] args:", dump(table.pack(...)))
+                    warn("[RAT][LEARN] resp:", dump(resp))
+                    return table.unpack(resp, 1, resp.n)
+                end
+
+                if not checkcaller() or SPOOF_OWN then
+                    if USE_FULL_SPOOF then
+                        return fullSpoof()
+                    end
+                    local resp = table.pack(old_namecall(self, ...))
+                    for i = 1, resp.n do
+                        resp[i] = patchGates(resp[i])
+                    end
+                    return table.unpack(resp, 1, resp.n)
+                end
+            else
+                local low = name:lower()
+                if not low:find("probe") and not low:find("awayearnings")
+                   and not low:find("analytics") and not low:find("ping")
+                   and not low:find("rigsync") then
+                    warn("[REMOTE]", method, name, "|", dump(table.pack(...)))
+                end
+            end
+        end
+    end
+
+    return old_namecall(self, ...)
+end))
+
+print("[RAT] v2 loaded. LEARN_MODE =", LEARN_MODE)
+print("[RAT] 1) join + buka panel, baca [LEARN] di console")
+print("[RAT] 2) set LEARN_MODE=false, execute ulang, buka panel lagi")
+print("[RAT] 3) klik Apply — remote aksi muncul di [REMOTE]")
